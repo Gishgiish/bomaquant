@@ -1,0 +1,12 @@
+[submodule "src/analysis_engine"]
+	path = src/analysis_engine
+	url = https://github.com/ZhuLinsen/daily_stock_analysis.git
+[submodule "src/data_platform"]
+	path = src/data_platform
+	url = https://github.com/OpenBB-finance/OpenBB.git
+[submodule "src/quant_models"]
+	path = src/quant_models
+	url = https://github.com/microsoft/qlib.git
+[submodule "src/skills"]
+	path = src/skills
+	url = https://github.com/mvanhorn/last30days-skill.git
