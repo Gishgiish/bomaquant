@@ -1,0 +1,18 @@
+version: "3.9"
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: development
+      AUTH_ENABLED: "false"
+      NSE_RAPIDAPI_KEY: test_key_12345678901234567890
+    volumes:
+      - .:/app
+      - sqlite-data:/app/data
+
+volumes:
+  sqlite-data:
