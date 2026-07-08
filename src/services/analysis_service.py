@@ -1,12 +1,9 @@
-import json
-import sqlite3
-import threading
 import time
-import uuid
-from datetime import datetime, timezone
 from importlib import import_module
-from pathlib import Path
 from typing import Any, Dict, Optional
+
+from src.services.job_repository import SQLiteJobRepository
+from src.services.job_worker import JobWorker
 
 
 def _load_analysis_function():
@@ -49,127 +46,33 @@ def run_analysis_engine(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 class AnalysisService:
-    def __init__(self, storage_path: Optional[str] = None):
-        self.storage_path = Path(storage_path or "data/analysis_jobs.sqlite3")
-        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-
-    def _init_db(self) -> None:
-        with sqlite3.connect(self.storage_path) as connection:
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS analysis_jobs (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    payload TEXT,
-                    result TEXT,
-                    report TEXT,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
-            )
-            connection.commit()
+    def __init__(self, storage_path: Optional[str] = None, repository=None, worker=None):
+        self.repository = repository or SQLiteJobRepository(storage_path=storage_path)
+        self.worker = worker or JobWorker(handler=self._process_job)
 
     def create_job(self, title: str, description: Optional[str], payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        job_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.storage_path) as connection:
-            connection.execute(
-                """
-                INSERT INTO analysis_jobs (
-                    id, title, description, payload, result, report, status, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    title,
-                    description,
-                    json.dumps(payload or {}),
-                    None,
-                    None,
-                    "queued",
-                    now,
-                    now,
-                ),
-            )
-            connection.commit()
-
-        self._dispatch_job(job_id)
-
-        return {
-            "id": job_id,
-            "title": title,
-            "description": description,
-            "payload": payload or {},
-            "result": None,
-            "report": None,
-            "status": "queued",
-            "created_at": now,
-            "updated_at": now,
-        }
+        job = self.repository.create_job(title, description, payload)
+        self._dispatch_job(job["id"])
+        return job
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         for _ in range(10):
-            with sqlite3.connect(self.storage_path) as connection:
-                row = connection.execute(
-                    "SELECT id, title, description, payload, result, report, status, created_at, updated_at "
-                    "FROM analysis_jobs WHERE id = ?",
-                    (job_id,),
-                ).fetchone()
-
-            if row is None:
+            job = self.repository.get_job(job_id)
+            if job is None:
                 return None
-
-            status = row[6]
-            if status in {"completed", "failed"}:
-                return {
-                    "id": row[0],
-                    "title": row[1],
-                    "description": row[2],
-                    "payload": json.loads(row[3] or "{}"),
-                    "result": json.loads(row[4] or "null") if row[4] else None,
-                    "report": json.loads(row[5] or "null") if row[5] else None,
-                    "status": status,
-                    "created_at": row[7],
-                    "updated_at": row[8],
-                }
-
+            if job["status"] in {"completed", "failed"}:
+                return job
             time.sleep(0.02)
 
-        with sqlite3.connect(self.storage_path) as connection:
-            row = connection.execute(
-                "SELECT id, title, description, payload, result, report, status, created_at, updated_at "
-                "FROM analysis_jobs WHERE id = ?",
-                (job_id,),
-            ).fetchone()
-
-        if row is None:
-            return None
-
-        return {
-            "id": row[0],
-            "title": row[1],
-            "description": row[2],
-            "payload": json.loads(row[3] or "{}"),
-            "result": json.loads(row[4] or "null") if row[4] else None,
-            "report": json.loads(row[5] or "null") if row[5] else None,
-            "status": row[6],
-            "created_at": row[7],
-            "updated_at": row[8],
-        }
+        return self.repository.get_job(job_id)
 
     def _dispatch_job(self, job_id: str) -> None:
-        thread = threading.Thread(target=self._process_job, args=(job_id,), daemon=True)
-        thread.start()
+        payload = self.repository.get_job_payload(job_id)
+        self.worker.dispatch(job_id, payload)
 
-    def _process_job(self, job_id: str) -> None:
-        self._update_status(job_id, "running")
+    def _process_job(self, job_id: str, payload: Dict[str, Any]) -> None:
+        self.repository.update_status(job_id, "running")
         time.sleep(0.05)
-        payload = self._get_job_payload(job_id)
         try:
             analysis = run_analysis_engine(payload)
             report = {
@@ -178,52 +81,6 @@ class AnalysisService:
                 "payload": payload,
                 "analysis": analysis,
             }
-            self._complete_job(job_id, report)
+            self.repository.complete_job(job_id, {"status": "completed", "report_id": job_id}, report)
         except Exception as exc:
-            self._fail_job(job_id, str(exc))
-
-    def _complete_job(self, job_id: str, report: Dict[str, Any]) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        result_payload = {"status": "completed", "report_id": job_id}
-        with sqlite3.connect(self.storage_path) as connection:
-            connection.execute(
-                "UPDATE analysis_jobs SET result = ?, report = ?, status = ?, updated_at = ? "
-                "WHERE id = ?",
-                (json.dumps(result_payload), json.dumps(report), "completed", now, job_id),
-            )
-            connection.commit()
-
-    def _fail_job(self, job_id: str, error_message: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        result_payload = {"status": "failed", "error": error_message}
-        report = {
-            "summary": "analysis failed",
-            "job_id": job_id,
-            "error": error_message,
-        }
-        with sqlite3.connect(self.storage_path) as connection:
-            connection.execute(
-                "UPDATE analysis_jobs SET result = ?, report = ?, status = ?, updated_at = ? "
-                "WHERE id = ?",
-                (json.dumps(result_payload), json.dumps(report), "failed", now, job_id),
-            )
-            connection.commit()
-
-    def _get_job_payload(self, job_id: str) -> Dict[str, Any]:
-        with sqlite3.connect(self.storage_path) as connection:
-            row = connection.execute(
-                "SELECT payload FROM analysis_jobs WHERE id = ?",
-                (job_id,),
-            ).fetchone()
-        if row is None:
-            return {}
-        return json.loads(row[0] or "{}")
-
-    def _update_status(self, job_id: str, status: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.storage_path) as connection:
-            connection.execute(
-                "UPDATE analysis_jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (status, now, job_id),
-            )
-            connection.commit()
+            self.repository.fail_job(job_id, str(exc))

@@ -26,4 +26,7 @@ This backend is designed to run locally with a lightweight Python environment an
 
 - Keep API credentials in secret storage rather than committing them to source control.
 - If you rely on SQLite for jobs, ensure the mounted storage persists across restarts.
+- The first premium-platform milestone introduces a repository abstraction for job persistence and a lightweight worker abstraction for job dispatch; this keeps the backend extensible while still using SQLite locally.
+- The latest milestone adds simple portfolio and subscription domain models plus a provider registry so additional market-data providers can be introduced without rewriting the service layer.
+- The product-readiness layer now includes portfolio CRUD, watchlist updates, portfolio listing, watchlist retrieval, feature-gated premium access checks, and audit logging for create/update operations so the backend is easier to operate and review.
 - For higher availability, replace SQLite with a managed relational database later.

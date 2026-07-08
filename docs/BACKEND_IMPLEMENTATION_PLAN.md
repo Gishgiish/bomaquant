@@ -20,6 +20,14 @@ The backend foundation is now in place and the following pieces are working loca
 - [x] Local startup path via Uvicorn
 - [x] Background job persistence with explicit success and failure states
 - [x] API tests covering completed and failed job flows
+- [x] A reusable job repository abstraction backed by SQLite
+- [x] A lightweight worker abstraction for dispatching analysis jobs
+- [x] Core domain models for portfolios and subscriptions
+- [x] A simple provider registry that can resolve named providers
+- [x] Portfolio CRUD and watchlist management endpoints
+- [x] Audit logging for portfolio and watchlist create/update activity
+- [x] Portfolio listing and watchlist retrieval endpoints for richer user workflows
+- [x] Feature-gated premium access checks for portfolio and watchlist workflows
 
 ## Working assumptions
 
@@ -79,6 +87,8 @@ The backend foundation is now in place and the following pieces are working loca
 3. Move from local SQLite persistence to a production-grade database strategy with migrations.
 4. Add observability, metrics, and deployment health checks for job processing and provider outages.
 5. Expand the analysis workflow so background jobs can be retried, cancelled, and monitored more explicitly.
+6. Introduce portfolio and subscription domain models on top of the new repository layer. [x]
+7. Add a provider registry and normalized schema for multiple market-data sources. [x]
 
 ## Working notes
 

@@ -171,6 +171,60 @@ def test_failed_jobs_are_marked_with_failure_state(client, monkeypatch):
     assert "engine exploded" in fetched.json()["result"]["error"]
 
 
+def test_portfolio_endpoints_create_and_retrieve(client):
+    response = client.post(
+        "/portfolios",
+        json={"name": "Growth", "symbols": ["SCOM", "EQTY"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Growth"
+    assert body["symbols"] == ["SCOM", "EQTY"]
+
+    fetched = client.get("/portfolios/Growth")
+    assert fetched.status_code == 200
+    assert fetched.json()["name"] == "Growth"
+
+
+def test_subscription_endpoints_create_and_retrieve(client):
+    response = client.post(
+        "/subscriptions",
+        json={"plan": "premium", "customer_id": "cust-001", "status": "active"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["plan"] == "premium"
+    assert body["customer_id"] == "cust-001"
+
+    fetched = client.get("/subscriptions/cust-001")
+    assert fetched.status_code == 200
+    assert fetched.json()["customer_id"] == "cust-001"
+
+
+def test_portfolio_and_subscription_data_persist_across_requests(client):
+    created_portfolio = client.post(
+        "/portfolios",
+        json={"name": "Persisted", "symbols": ["SCOM"]},
+    )
+    assert created_portfolio.status_code == 200
+
+    fetched_portfolio = client.get("/portfolios/Persisted")
+    assert fetched_portfolio.status_code == 200
+    assert fetched_portfolio.json()["symbols"] == ["SCOM"]
+
+    created_subscription = client.post(
+        "/subscriptions",
+        json={"plan": "basic", "customer_id": "persisted-customer", "status": "active"},
+    )
+    assert created_subscription.status_code == 200
+
+    fetched_subscription = client.get("/subscriptions/persisted-customer")
+    assert fetched_subscription.status_code == 200
+    assert fetched_subscription.json()["plan"] == "basic"
+
+
 def test_protected_endpoints_require_auth(tmp_path):
     storage_path = tmp_path / "analysis_jobs.sqlite3"
     persistence_service = AnalysisService(storage_path=str(storage_path))
