@@ -4,14 +4,32 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+
+def _load_analysis_function():
+    for module_name in (
+        "src.analysis_engine.src.services.analyzer_service",
+        "src.analysis_engine.analyzer_service",
+    ):
+        try:
+            module = import_module(module_name)
+        except Exception:
+            continue
+
+        analyze_stock = getattr(module, "analyze_stock", None)
+        if callable(analyze_stock):
+            return analyze_stock
+
+    raise ImportError("analysis engine module is unavailable")
 
 
 def run_analysis_engine(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Small bridge to the analysis engine for local and test usage."""
     try:
-        from src.analysis_engine.analyzer_service import analyze_stock
+        analyze_stock = _load_analysis_function()
     except Exception:
         return {"status": "unavailable", "message": "analysis engine unavailable"}
 
@@ -152,14 +170,17 @@ class AnalysisService:
         self._update_status(job_id, "running")
         time.sleep(0.05)
         payload = self._get_job_payload(job_id)
-        analysis = run_analysis_engine(payload)
-        report = {
-            "summary": "analysis completed",
-            "job_id": job_id,
-            "payload": payload,
-            "analysis": analysis,
-        }
-        self._complete_job(job_id, report)
+        try:
+            analysis = run_analysis_engine(payload)
+            report = {
+                "summary": "analysis completed",
+                "job_id": job_id,
+                "payload": payload,
+                "analysis": analysis,
+            }
+            self._complete_job(job_id, report)
+        except Exception as exc:
+            self._fail_job(job_id, str(exc))
 
     def _complete_job(self, job_id: str, report: Dict[str, Any]) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -169,6 +190,22 @@ class AnalysisService:
                 "UPDATE analysis_jobs SET result = ?, report = ?, status = ?, updated_at = ? "
                 "WHERE id = ?",
                 (json.dumps(result_payload), json.dumps(report), "completed", now, job_id),
+            )
+            connection.commit()
+
+    def _fail_job(self, job_id: str, error_message: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        result_payload = {"status": "failed", "error": error_message}
+        report = {
+            "summary": "analysis failed",
+            "job_id": job_id,
+            "error": error_message,
+        }
+        with sqlite3.connect(self.storage_path) as connection:
+            connection.execute(
+                "UPDATE analysis_jobs SET result = ?, report = ?, status = ?, updated_at = ? "
+                "WHERE id = ?",
+                (json.dumps(result_payload), json.dumps(report), "failed", now, job_id),
             )
             connection.commit()
 

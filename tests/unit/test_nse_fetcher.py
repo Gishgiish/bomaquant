@@ -2,6 +2,7 @@
 from datetime import datetime
 
 import pytest
+import requests
 import requests_mock
 
 from src.config.settings import get_settings
@@ -104,6 +105,54 @@ def test_fetch_handles_api_error(fetcher):
         assert result["error"] is not None
         assert "rate_limit" in result["error"]["type"]
         assert result["success"] is False
+
+
+def test_fetch_retries_transient_errors(fetcher):
+    """Transient failures should be retried and eventually succeed."""
+    symbol = "SCOM"
+    mock_response = {
+        "symbol": "SCOM",
+        "name": "Safaricom PLC",
+        "price": 30.0,
+        "currency": "KES",
+        "change_percent": 1.5,
+        "volume": 2000000,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    with requests_mock.Mocker() as m:
+        m.get(
+            "https://nairobi-stock-exchange-nse.p.rapidapi.com/stock/SCOM",
+            [
+                {"exc": requests.ConnectionError("temporary outage")},
+                {"json": mock_response, "status_code": 200},
+            ],
+        )
+
+        result = fetcher.fetch(symbol)
+
+        assert result["success"] is True
+        assert result["price"] == 30.0
+        assert m.call_count == 2
+
+
+def test_fetch_returns_fallback_payload_after_retries(fetcher):
+    """Exhausted retries should return a structured fallback payload."""
+    symbol = "KCB"
+
+    with requests_mock.Mocker() as m:
+        m.get(
+            "https://nairobi-stock-exchange-nse.p.rapidapi.com/stock/KCB",
+            [{"exc": requests.Timeout("slow upstream")}, {"exc": requests.Timeout("slow upstream")}, {"exc": requests.Timeout("slow upstream")}],
+        )
+
+        result = fetcher.fetch(symbol)
+
+        assert result["success"] is False
+        assert result["fallback"] is True
+        assert result["symbol"] == "KCB"
+        assert result["error"]["type"] == "provider_error"
+
 
 def test_fetch_market_summary(fetcher):
     """Test fetching NSE 20 Index summary"""

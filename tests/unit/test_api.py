@@ -147,6 +147,30 @@ def test_completed_jobs_include_analysis_report(client, monkeypatch):
     assert fetched.json()["report"]["analysis"]["symbol"] == "SCOM"
 
 
+def test_failed_jobs_are_marked_with_failure_state(client, monkeypatch):
+    def fake_run_analysis(payload):
+        raise RuntimeError("engine exploded")
+
+    monkeypatch.setattr("src.services.analysis_service.run_analysis_engine", fake_run_analysis, raising=False)
+
+    response = client.post(
+        "/jobs",
+        json={
+            "title": "Failing analysis",
+            "description": "Trigger a failure",
+            "payload": {"symbol": "SCOM"},
+        },
+    )
+
+    job_id = response.json()["id"]
+    fetched = client.get(f"/jobs/{job_id}")
+
+    assert fetched.status_code == 200
+    assert fetched.json()["status"] == "failed"
+    assert fetched.json()["result"]["status"] == "failed"
+    assert "engine exploded" in fetched.json()["result"]["error"]
+
+
 def test_protected_endpoints_require_auth(tmp_path):
     storage_path = tmp_path / "analysis_jobs.sqlite3"
     persistence_service = AnalysisService(storage_path=str(storage_path))

@@ -18,6 +18,8 @@ The backend foundation is now in place and the following pieces are working loca
 - [x] Structured startup logging and config-driven behavior
 - [x] Initial smoke tests for the API routes
 - [x] Local startup path via Uvicorn
+- [x] Background job persistence with explicit success and failure states
+- [x] API tests covering completed and failed job flows
 
 ## Working assumptions
 
@@ -72,11 +74,11 @@ The backend foundation is now in place and the following pieces are working loca
 
 ## Recommended next steps
 
-1. Add CI checks for linting, type validation, and tests.
-2. Introduce a containerized local stack with Docker Compose for the API and a SQLite-backed local store.
-3. Create a provider abstraction layer for market data sources and normalize responses across providers.
-4. Add retry/backoff and timeout handling improvements for network-bound fetchers.
-5. Add asynchronous job support for analysis requests and report retrieval.
+1. Continue hardening the dependency footprint so local and CI installs are consistent.
+2. Add stronger retry, timeout, and fallback behavior for provider-backed market data fetches.
+3. Move from local SQLite persistence to a production-grade database strategy with migrations.
+4. Add observability, metrics, and deployment health checks for job processing and provider outages.
+5. Expand the analysis workflow so background jobs can be retried, cancelled, and monitored more explicitly.
 
 ## Working notes
 

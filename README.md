@@ -22,7 +22,7 @@ Copy [.env.example](.env.example) to .env to override local settings such as aut
 
 ## Current status
 
-The backend now has a minimal FastAPI application shell, readiness checks, config-driven auth, structured logging, provider-backed market data access, background analysis jobs, and smoke tests for the main routes.
+The backend now has a minimal FastAPI application shell, readiness checks, config-driven auth, structured logging, provider-backed market data access, background analysis jobs, and automated API tests for the main routes. The current implementation also records explicit failure states for analysis jobs when the analysis bridge errors.
 
 ## Deployment and operations
 

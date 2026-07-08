@@ -21,6 +21,10 @@ class RetryConfiguration:
         self.backoff_factor = backoff_factor
 
 
+class RetryableProviderError(RuntimeError):
+    """Raised when a transient provider error should be retried."""
+
+
 class NSEFetcher(BaseDataFetcher, MarketDataProvider):
     """Fetcher for Nairobi Securities Exchange (Kenya) data"""
     
@@ -74,61 +78,86 @@ class NSEFetcher(BaseDataFetcher, MarketDataProvider):
 
             data = normalized
 
-            # 4. Cache successful response
             if use_cache:
                 self.cache.set(
                     endpoint=self.STOCK_ENDPOINT.format(symbol=symbol),
                     params={"symbol": symbol},
                     data=data
                 )
-            
+
             self._log_api_call(self.STOCK_ENDPOINT, symbol, success=True)
             return data
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch {symbol}: {e}", exc_info=True)
             self._log_api_call(self.STOCK_ENDPOINT, symbol, success=False)
-            error_type = "rate_limit_error" if "rate limit" in str(e).lower() else "api_error"
-            return self._error_response(error_type, str(e))
+            error_type = "rate_limit_error" if "rate limit" in str(e).lower() or "429" in str(e) else "provider_error"
+            return self._fallback_response(symbol, error_type, str(e))
     
     def _fetch_with_retry(self, symbol: str) -> Dict[str, Any]:
-        """Internal: Fetch with exponential backoff retry"""
-        last_error = None
-        
+        """Internal: Fetch with exponential backoff retry."""
+        last_error: Optional[Exception] = None
+
         for attempt in range(self.retry_config.retries):
             try:
                 url = f"{self.RAPIDAPI_BASE}{self.STOCK_ENDPOINT.format(symbol=symbol)}"
                 response = self.session.get(url, timeout=self.timeout)
-                
-                # Handle HTTP errors
-                if response.status_code == 429:
-                    raise RuntimeError("Rate limit exceeded")
-                elif response.status_code >= 400:
+
+                if response.status_code in {408, 429, 500, 502, 503, 504}:
+                    raise RetryableProviderError(f"Transient API error {response.status_code}")
+                if response.status_code >= 400:
                     raise RuntimeError(f"API error {response.status_code}: {response.text}")
-                
+
                 data = response.json()
-                
-                # Validate response structure (basic)
+
                 if "price" not in data or "symbol" not in data:
                     raise RuntimeError("Invalid API response structure")
-                
-                # Sanitize numeric fields
+
                 data["price"] = validate_positive_number(data["price"], "price")
                 if "volume" in data:
                     data["volume"] = validate_positive_number(data["volume"], "volume")
-                
+
                 return data
-                
-            except requests.RequestException as e:
-                last_error = e
+
+            except RetryableProviderError as exc:
+                last_error = exc
                 if attempt < self.retry_config.retries - 1:
-                    wait = self.retry_config.backoff_base_seconds * (self.retry_config.backoff_factor ** attempt)
-                    time.sleep(wait)
+                    self._sleep_with_backoff(attempt)
                     continue
                 raise
-        
+            except requests.RequestException as exc:
+                last_error = exc
+                if attempt < self.retry_config.retries - 1:
+                    self._sleep_with_backoff(attempt)
+                    continue
+                raise
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt < self.retry_config.retries - 1 and "Transient" in str(exc):
+                    self._sleep_with_backoff(attempt)
+                    continue
+                raise
+
         raise last_error or RuntimeError("Unknown fetch error")
     
+    def _sleep_with_backoff(self, attempt: int) -> None:
+        wait = self.retry_config.backoff_base_seconds * (self.retry_config.backoff_factor ** attempt)
+        time.sleep(wait)
+
+    def _fallback_response(self, symbol: str, error_type: str, message: str, *, cached: bool = False) -> Dict[str, Any]:
+        return {
+            "success": False,
+            "fallback": True,
+            "provider": "nse",
+            "symbol": symbol.upper(),
+            "cached": cached,
+            "error": {
+                "type": error_type,
+                "message": message,
+                "timestamp": time.time(),
+            },
+        }
+
     def get_stock(self, symbol: str) -> Dict[str, Any]:
         return self.fetch(symbol, use_cache=True)
 
@@ -150,7 +179,7 @@ class NSEFetcher(BaseDataFetcher, MarketDataProvider):
             url = f"{self.RAPIDAPI_BASE}{self.SUMMARY_ENDPOINT}"
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
-            
+
             data = response.json()
             normalized = normalize_provider_payload(data, kind="market_summary")
             normalized["cached"] = False
@@ -158,19 +187,19 @@ class NSEFetcher(BaseDataFetcher, MarketDataProvider):
             normalized.setdefault("success", True)
             normalized.setdefault("provider", "nse")
             data = normalized
-            
+
             if use_cache:
                 self.cache.set(
                     endpoint=self.SUMMARY_ENDPOINT,
                     params={},
                     data=data
                 )
-            
+
             return data
-            
+
         except Exception as e:
             logger.error(f"Market summary fetch failed: {e}")
-            return self._error_response("summary_error", str(e))
+            return self._fallback_response("SUMMARY", "summary_error", str(e))
     
     def _validate_symbol(self, symbol: str) -> str:
         """Override base validation with NSE-specific rules"""
